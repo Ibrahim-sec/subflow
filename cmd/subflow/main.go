@@ -347,7 +347,10 @@ func runTargetPipeline(ctx context.Context, target string, cfg PipelineConfig, o
 			}
 			smartPatterns = append(smartPatterns, basePatterns...)
 
-			permutations = scanner.RunAlterxParallel(discoveryDomains, smartPatterns)
+			// Only use the base domain for alterx, not all discovered subdomains
+			// This prevents exponential permutation growth
+			baseDomainInput := []string{target}
+			permutations = scanner.RunAlterxParallel(baseDomainInput, smartPatterns)
 			
 			if !*silentFlag {
 				logger.Debug("smart alterx permutations", "patterns_used", len(smartPatterns), "generated", len(permutations))
@@ -363,7 +366,9 @@ func runTargetPipeline(ctx context.Context, target string, cfg PipelineConfig, o
 				{Pattern: "{{word}}-{{sub}}.{{suffix}}", WordList: *wordlistFlag},
 				{Pattern: "{{sub}}-{{word}}.{{suffix}}", WordList: *wordlistFlag},
 			}
-			permutations = scanner.RunAlterxParallel(discoveryDomains, defaultPatterns)
+			// Only use the base domain for alterx, not all discovered subdomains
+			baseDomainInput := []string{target}
+			permutations = scanner.RunAlterxParallel(baseDomainInput, defaultPatterns)
 		}
 
 		if !*silentFlag {

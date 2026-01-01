@@ -259,9 +259,11 @@ func ProbeBatchConfig(domains []string, target string, cfg ProbeConfig) []ProbeR
 		}
 	}()
 
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		line := scanner.Text()
+	batchScanner := bufio.NewScanner(stdout)
+	// Increase buffer size to handle large JSON lines (1MB instead of default 64KB)
+	batchScanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for batchScanner.Scan() {
+		line := batchScanner.Text()
 		var httpxResult HttpxResult
 		if err := json.Unmarshal([]byte(line), &httpxResult); err != nil {
 			continue
