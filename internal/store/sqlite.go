@@ -98,10 +98,17 @@ func GetDBPath() string {
 	return filepath.Join(home, ".config", "subflow", "subflow.db")
 }
 
+var dbInitFailed bool
+var dbInitError error
+
 // IsNewDomain checks if a domain has been seen before
 func IsNewDomain(domain string) bool {
 	if db == nil {
 		if err := InitDB(); err != nil {
+			if !dbInitFailed {
+				dbInitFailed = true
+				dbInitError = err
+			}
 			return true
 		}
 	}
@@ -282,5 +289,18 @@ func Close() {
 	if db != nil {
 		db.Close()
 	}
+}
+
+// GetDBStatus returns whether the database is working and any error
+func GetDBStatus() (working bool, err error) {
+	if dbInitFailed {
+		return false, dbInitError
+	}
+	if db == nil {
+		if err := InitDB(); err != nil {
+			return false, err
+		}
+	}
+	return true, nil
 }
 

@@ -182,6 +182,12 @@ func main() {
 
 	if !*silentFlag {
 		logger.Info("starting subflow", "version", version, "targets", len(targets))
+		
+		// Check database status
+		if working, err := store.GetDBStatus(); !working {
+			logger.Warn("database not available - deduplication and change detection disabled", "error", err)
+			logger.Warn("install sqlite3: sudo apt-get install libsqlite3-dev (for database features)")
+		}
 	}
 
 	// Run pipeline
