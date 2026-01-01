@@ -38,10 +38,11 @@ func RunAlterx(subdomains []string, pattern AlterxPattern) ([]string, error) {
 	}
 
 	args := []string{
-		"-en", // enrich
 		"-p", pattern.Pattern,
 		"-silent",
 	}
+	// Note: removed -en (enrich) flag as it extracts keywords from input
+	// and causes exponential permutation growth when combined with wordlists
 
 	if pattern.WordList != "" {
 		args = append(args, "-pp", "word="+pattern.WordList)
