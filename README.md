@@ -106,6 +106,7 @@ NOTIFICATIONS:
    -telegram-token      Telegram bot token
    -telegram-chat       Telegram chat ID
    -notify string       Notification provider: discord, telegram, both
+   -test-notify         Test Discord/Telegram webhook configuration
 
 CONFIG:
    -config string       Path to config file
@@ -179,6 +180,16 @@ ports: "80,443,8080,8443"
 ```bash
 subflow -target example.com -config config.yaml -subfinder -probe
 ```
+
+### Testing Notifications
+
+Test your Discord/Telegram webhook before running scans:
+
+```bash
+subflow -test-notify
+```
+
+This sends a test message to verify your notification channels are working correctly.
 
 ## Output
 

@@ -68,6 +68,7 @@ var (
 	showVersion = flag.Bool("version", false, "show version")
 	showHelp    = flag.Bool("h", false, "show help")
 	showHelp2   = flag.Bool("help", false, "show help")
+	testNotify  = flag.Bool("test-notify", false, "test Discord/Telegram notification")
 
 	// Logger
 	logger = log.NewWithOptions(os.Stderr, log.Options{
@@ -87,6 +88,12 @@ func main() {
 
 	if *showHelp || *showHelp2 {
 		displayHelp()
+		return
+	}
+
+	// Handle test notification
+	if *testNotify {
+		testNotification()
 		return
 	}
 
@@ -619,6 +626,86 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
+// testNotification sends a test notification to verify webhook configuration
+func testNotification() {
+	fmt.Println("🔔 Testing notification configuration...")
+
+	// Load config
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Printf("❌ Failed to load config: %v\n", err)
+		fmt.Println("   Create config with: subflow -target example.com (first run creates template)")
+		return
+	}
+
+	if cfg == nil {
+		fmt.Println("❌ No config file found")
+		fmt.Println("   Config location: ~/.config/subflow/config.yaml")
+		fmt.Println("   Create config with: subflow -target example.com (first run creates template)")
+		return
+	}
+
+	webhookURL := strings.TrimSpace(cfg.Webhook)
+	hasTelegram := cfg.TelegramBotToken != "" && cfg.TelegramChatID != ""
+
+	if webhookURL == "" && !hasTelegram {
+		fmt.Println("❌ No notification channels configured")
+		fmt.Println("   Edit ~/.config/subflow/config.yaml and add:")
+		fmt.Println("   webhook: \"https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN\"")
+		return
+	}
+
+	// Test Discord
+	if webhookURL != "" {
+		fmt.Printf("📤 Sending test to Discord webhook...\n")
+		
+		payload := map[string]interface{}{
+			"embeds": []map[string]interface{}{
+				{
+					"title":       "🧪 Subflow Test Notification",
+					"description": "If you see this message, your Discord webhook is configured correctly!",
+					"color":       3066993, // Green
+					"fields": []map[string]interface{}{
+						{"name": "Status", "value": "✅ Working", "inline": true},
+						{"name": "Version", "value": version, "inline": true},
+					},
+					"footer":    map[string]string{"text": "subflow notification test"},
+					"timestamp": time.Now().Format(time.RFC3339),
+				},
+			},
+		}
+
+		jsonData, _ := json.Marshal(payload)
+		notify.SendDiscordWebhook(webhookURL, jsonData)
+		fmt.Println("✅ Discord test sent! Check your Discord channel.")
+	}
+
+	// Test Telegram
+	if hasTelegram {
+		fmt.Printf("📤 Sending test to Telegram...\n")
+		notify.InitTelegram(cfg.TelegramBotToken, cfg.TelegramChatID)
+		notify.SendTelegramMessage("🧪 *Subflow Test Notification*\n\nIf you see this message, your Telegram bot is configured correctly!\n\n✅ Status: Working\n📦 Version: " + version)
+		fmt.Println("✅ Telegram test sent! Check your Telegram chat.")
+	}
+
+	fmt.Println("\n📋 Notification settings:")
+	if webhookURL != "" {
+		// Mask the webhook URL for security
+		masked := webhookURL
+		if len(webhookURL) > 50 {
+			masked = webhookURL[:40] + "..." + webhookURL[len(webhookURL)-10:]
+		}
+		fmt.Printf("   Discord: %s\n", masked)
+	} else {
+		fmt.Println("   Discord: not configured")
+	}
+	if hasTelegram {
+		fmt.Printf("   Telegram: bot configured (chat: %s)\n", cfg.TelegramChatID)
+	} else {
+		fmt.Println("   Telegram: not configured")
+	}
+}
+
 var telegramEnabled bool
 
 func runParallelPipeline(ctx context.Context, targets []string, cfg PipelineConfig, threads int, outputWriter *output.Writer) {
@@ -1058,6 +1145,7 @@ func displayHelp() {
 	fmt.Println("   subflow -target example.com -probe -bypass")
 	fmt.Println("   subflow -target example.com -full -notify discord")
 	fmt.Println("   subflow -target targets.txt -full -threads 5 -output results.json")
+	fmt.Println("   subflow -test-notify                      # test Discord/Telegram webhook")
 	fmt.Println()
 
 	fmt.Println(" Target:")
@@ -1103,6 +1191,7 @@ func displayHelp() {
 
 	fmt.Println(" Notifications:")
 	fmt.Println("   -notify       discord, telegram, both")
+	fmt.Println("   -test-notify  test Discord/Telegram webhook")
 	fmt.Println("   -db           database path")
 	fmt.Println()
 
