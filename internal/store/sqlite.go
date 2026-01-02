@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -359,5 +360,104 @@ func BatchStoreDomains(domains []string, target string) error {
 	}
 
 	return tx.Commit()
+}
+
+// ClearAllDomains deletes all domains and related probe results from the database
+func ClearAllDomains() error {
+	if db == nil {
+		if err := InitDB(); err != nil {
+			return err
+		}
+	}
+
+	dbMu.Lock()
+	defer dbMu.Unlock()
+
+	// Delete probe_results first (due to foreign key constraint)
+	_, err := db.Exec("DELETE FROM probe_results")
+	if err != nil {
+		return fmt.Errorf("failed to delete probe results: %w", err)
+	}
+
+	// Delete all domains
+	_, err = db.Exec("DELETE FROM domains")
+	if err != nil {
+		return fmt.Errorf("failed to delete domains: %w", err)
+	}
+
+	return nil
+}
+
+// ClearTargetDomains deletes all domains and probe results for a specific target
+func ClearTargetDomains(target string) error {
+	if db == nil {
+		if err := InitDB(); err != nil {
+			return err
+		}
+	}
+
+	dbMu.Lock()
+	defer dbMu.Unlock()
+
+	// Delete probe results for domains belonging to this target
+	_, err := db.Exec(`
+		DELETE FROM probe_results 
+		WHERE domain IN (SELECT domain FROM domains WHERE target = ? OR target = '')
+	`, target)
+	if err != nil {
+		return fmt.Errorf("failed to delete probe results: %w", err)
+	}
+
+	// Delete domains for this target
+	_, err = db.Exec("DELETE FROM domains WHERE target = ? OR target = ''", target)
+	if err != nil {
+		return fmt.Errorf("failed to delete domains: %w", err)
+	}
+
+	return nil
+}
+
+// ClearScanState clears all scan state records
+func ClearAllScanState() error {
+	if db == nil {
+		if err := InitDB(); err != nil {
+			return err
+		}
+	}
+
+	dbMu.Lock()
+	defer dbMu.Unlock()
+
+	_, err := db.Exec("DELETE FROM scan_state")
+	return err
+}
+
+// GetDatabaseStats returns statistics about the database
+func GetDatabaseStats() (domainCount, probeCount, scanStateCount int, err error) {
+	if db == nil {
+		if err := InitDB(); err != nil {
+			return 0, 0, 0, err
+		}
+	}
+
+	dbMu.Lock()
+	defer dbMu.Unlock()
+
+	err = db.QueryRow("SELECT COUNT(*) FROM domains").Scan(&domainCount)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	err = db.QueryRow("SELECT COUNT(*) FROM probe_results").Scan(&probeCount)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	err = db.QueryRow("SELECT COUNT(*) FROM scan_state").Scan(&scanStateCount)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	return domainCount, probeCount, scanStateCount, nil
 }
 

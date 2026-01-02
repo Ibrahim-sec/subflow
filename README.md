@@ -118,6 +118,12 @@ NOTIFICATIONS:
 CONFIG:
    -config string          Path to config file
    -threads int            Number of concurrent targets (default: 5)
+
+DATABASE:
+   -db string              Database path (default: ~/.config/subflow/subflow.db)
+   -clear-db               Delete all domains and probe results from database
+   -clear-target string    Delete all domains for a specific target
+   -db-stats               Show database statistics
    -timeout int         Timeout in seconds (default: 30)
    -delay int           Delay between requests in ms
 
@@ -202,19 +208,32 @@ This sends a test message to verify your notification channels are working corre
 
 ### Database
 
-All results are stored in SQLite (`subflow.db`):
+All results are stored in SQLite (`~/.config/subflow/subflow.db`):
 
 ```sql
 -- View all subdomains
-SELECT * FROM subdomains WHERE domain = 'example.com';
+SELECT * FROM domains WHERE target = 'example.com';
 
 -- View HTTP results
-SELECT url, status_code, title FROM http_results;
+SELECT url, status_code, title FROM probe_results;
 
 -- Export to CSV
 .mode csv
 .output results.csv
-SELECT * FROM subdomains;
+SELECT * FROM domains;
+```
+
+#### Database Management
+
+```bash
+# View database statistics
+subflow -db-stats
+
+# Delete all domains and probe results (with confirmation)
+subflow -clear-db
+
+# Delete all domains for a specific target
+subflow -clear-target example.com
 ```
 
 ### JSON Output

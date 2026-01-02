@@ -70,6 +70,9 @@ var (
 	showHelp    = flag.Bool("h", false, "show help")
 	showHelp2   = flag.Bool("help", false, "show help")
 	testNotify  = flag.Bool("test-notify", false, "test Discord/Telegram notification")
+	clearDB     = flag.Bool("clear-db", false, "delete all domains and probe results from database")
+	clearTarget = flag.String("clear-target", "", "delete all domains for a specific target")
+	dbStats     = flag.Bool("db-stats", false, "show database statistics")
 
 	// Logger
 	logger = log.NewWithOptions(os.Stderr, log.Options{
@@ -95,6 +98,22 @@ func main() {
 	// Handle test notification
 	if *testNotify {
 		testNotification()
+		return
+	}
+
+	// Handle database cleanup
+	if *clearDB {
+		clearDatabase()
+		return
+	}
+
+	if *clearTarget != "" {
+		clearTargetDatabase(*clearTarget)
+		return
+	}
+
+	if *dbStats {
+		showDatabaseStats()
 		return
 	}
 
@@ -647,6 +666,130 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// clearDatabase deletes all domains and probe results from the database
+func clearDatabase() {
+	fmt.Println("🗑️  Clearing all domains and probe results from database...")
+
+	// Get stats before deletion
+	domainCount, probeCount, _, err := store.GetDatabaseStats()
+	if err != nil {
+		fmt.Printf("❌ Failed to get database stats: %v\n", err)
+		return
+	}
+
+	if domainCount == 0 && probeCount == 0 {
+		fmt.Println("✅ Database is already empty")
+		return
+	}
+
+	fmt.Printf("   Found: %d domains, %d probe results\n", domainCount, probeCount)
+	fmt.Print("   Are you sure you want to delete all data? (yes/no): ")
+
+	var confirmation string
+	fmt.Scanln(&confirmation)
+	if confirmation != "yes" && confirmation != "y" {
+		fmt.Println("❌ Cancelled")
+		return
+	}
+
+	err = store.ClearAllDomains()
+	if err != nil {
+		fmt.Printf("❌ Failed to clear database: %v\n", err)
+		return
+	}
+
+	// Also clear scan state
+	store.ClearAllScanState()
+
+	fmt.Printf("✅ Successfully deleted %d domains and %d probe results\n", domainCount, probeCount)
+	fmt.Println("   Database location:", store.GetDBPath())
+}
+
+// clearTargetDatabase deletes all domains for a specific target
+func clearTargetDatabase(target string) {
+	fmt.Printf("🗑️  Clearing all domains for target: %s\n", target)
+
+	// Get stats before deletion
+	domainCount, _, _, err := store.GetDatabaseStats()
+	if err != nil {
+		fmt.Printf("❌ Failed to get database stats: %v\n", err)
+		return
+	}
+
+	if domainCount == 0 {
+		fmt.Println("✅ Database is empty")
+		return
+	}
+
+	fmt.Print("   Are you sure you want to delete all data for this target? (yes/no): ")
+
+	var confirmation string
+	fmt.Scanln(&confirmation)
+	if confirmation != "yes" && confirmation != "y" {
+		fmt.Println("❌ Cancelled")
+		return
+	}
+
+	err = store.ClearTargetDomains(target)
+	if err != nil {
+		fmt.Printf("❌ Failed to clear target data: %v\n", err)
+		return
+	}
+
+	// Clear scan state for this target
+	store.ClearScanState(target)
+
+	fmt.Printf("✅ Successfully deleted all domains for target: %s\n", target)
+	fmt.Println("   Database location:", store.GetDBPath())
+}
+
+// showDatabaseStats displays database statistics
+func showDatabaseStats() {
+	fmt.Println("📊 Database Statistics")
+	fmt.Println("   Location:", store.GetDBPath())
+
+	domainCount, probeCount, scanStateCount, err := store.GetDatabaseStats()
+	if err != nil {
+		fmt.Printf("❌ Failed to get database stats: %v\n", err)
+		return
+	}
+
+	fmt.Printf("   Domains: %d\n", domainCount)
+	fmt.Printf("   Probe Results: %d\n", probeCount)
+	fmt.Printf("   Scan States: %d\n", scanStateCount)
+
+	if domainCount > 0 {
+		dbSize := getDatabaseSize()
+		if dbSize > 0 {
+			fmt.Printf("   Database Size: %s\n", formatBytes(dbSize))
+		}
+	}
+}
+
+// getDatabaseSize returns the size of the database file
+func getDatabaseSize() int64 {
+	dbPath := store.GetDBPath()
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		return 0
+	}
+	return info.Size()
+}
+
+// formatBytes formats bytes into human-readable format
+func formatBytes(bytes int64) string {
+	const unit = 1024
+	if bytes < unit {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	div, exp := int64(unit), 0
+	for n := bytes / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
 // testNotification sends a test notification to verify webhook configuration
@@ -1216,7 +1359,12 @@ func displayHelp() {
 	fmt.Println("   -notify              discord, telegram, both")
 	fmt.Println("   -test-notify         test Discord/Telegram webhook")
 	fmt.Println("   -notify-only-changes only notify on subsequent runs (skip first-run)")
+	fmt.Println()
+	fmt.Println(" Database:")
 	fmt.Println("   -db                  database path")
+	fmt.Println("   -clear-db            delete all domains and probe results")
+	fmt.Println("   -clear-target        delete all domains for a specific target")
+	fmt.Println("   -db-stats            show database statistics")
 	fmt.Println()
 
 	fmt.Println(" Severity Alerts (with -watch):")
