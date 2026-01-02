@@ -51,8 +51,9 @@ var (
 	silentFlag = flag.Bool("silent", false, "silent mode (domains only)")
 
 	// Processing flags
-	threadsFlag = flag.Int("threads", 1, "parallel target processing")
+	threadsFlag = flag.Int("threads", 5, "parallel target processing (default: 5)")
 	resumeFlag  = flag.Bool("resume", false, "resume interrupted scan")
+	notifyOnlyChanges = flag.Bool("notify-only-changes", false, "only notify on subsequent runs (skip first-run notifications)")
 
 	// HTTP probing flags
 	headersFlag   = flag.String("headers", "", "custom headers (comma-separated: 'H1:V1,H2:V2')")
@@ -247,6 +248,9 @@ func runTargetPipeline(ctx context.Context, target string, cfg PipelineConfig, o
 		logger.Info("processing target", "target", target)
 	}
 
+	// Check if this is a first run (no existing domains for this target)
+	isFirstRun := isFirstRunForTarget(target)
+
 	// Check for resume
 	if cfg.Resume {
 		phase, processed, lastDomain, found := store.GetScanState(target)
@@ -307,7 +311,7 @@ func runTargetPipeline(ctx context.Context, target string, cfg PipelineConfig, o
 
 	// NOTIFY: new subdomains from discovery stage
 	if len(newDiscoveryDomains) > 0 {
-		notifyNewDomains(newDiscoveryDomains, target, "discovery")
+		notifyNewDomains(newDiscoveryDomains, target, "discovery", isFirstRun)
 	}
 
 	// ============================================================
@@ -410,7 +414,7 @@ func runTargetPipeline(ctx context.Context, target string, cfg PipelineConfig, o
 
 		// NOTIFY: new subdomains from alterx stage
 		if len(newAlterxDomains) > 0 {
-			notifyNewDomains(newAlterxDomains, target, "alterx")
+			notifyNewDomains(newAlterxDomains, target, "alterx", isFirstRun)
 		}
 	}
 
@@ -525,7 +529,7 @@ func runTargetPipeline(ctx context.Context, target string, cfg PipelineConfig, o
 
 			// Send detailed notification for live hosts
 			if r.Error == "" {
-				sendProbeNotification(r, target)
+				sendProbeNotification(r, target, isFirstRun)
 			}
 		}
 	} else {
@@ -556,8 +560,16 @@ func runTargetPipeline(ctx context.Context, target string, cfg PipelineConfig, o
 }
 
 // notifyNewDomains sends a batch notification for new domains
-func notifyNewDomains(domains []string, target, stage string) {
+func notifyNewDomains(domains []string, target, stage string, isFirstRun bool) {
 	if len(domains) == 0 {
+		return
+	}
+
+	// Skip notifications on first run if -notify-only-changes is set
+	if *notifyOnlyChanges && isFirstRun {
+		if !*silentFlag {
+			logger.Debug("skipping first-run notifications", "stage", stage, "count", len(domains), "reason", "-notify-only-changes enabled")
+		}
 		return
 	}
 
@@ -576,9 +588,20 @@ func notifyNewDomains(domains []string, target, stage string) {
 	}
 }
 
+// isFirstRunForTarget checks if this is the first time scanning this target
+func isFirstRunForTarget(target string) bool {
+	knownDomains := store.GetAllKnownDomains(target)
+	return len(knownDomains) == 0
+}
+
 // sendProbeNotification sends detailed notification for a probed domain
-func sendProbeNotification(result scanner.ProbeResult, target string) {
+func sendProbeNotification(result scanner.ProbeResult, target string, isFirstRun bool) {
 	if webhookURL == "" && !telegramEnabled {
+		return
+	}
+
+	// Skip notifications on first run if -notify-only-changes is set
+	if *notifyOnlyChanges && isFirstRun {
 		return
 	}
 
@@ -1190,9 +1213,10 @@ func displayHelp() {
 	fmt.Println()
 
 	fmt.Println(" Notifications:")
-	fmt.Println("   -notify       discord, telegram, both")
-	fmt.Println("   -test-notify  test Discord/Telegram webhook")
-	fmt.Println("   -db           database path")
+	fmt.Println("   -notify              discord, telegram, both")
+	fmt.Println("   -test-notify         test Discord/Telegram webhook")
+	fmt.Println("   -notify-only-changes only notify on subsequent runs (skip first-run)")
+	fmt.Println("   -db                  database path")
 	fmt.Println()
 
 	fmt.Println(" Severity Alerts (with -watch):")

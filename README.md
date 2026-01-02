@@ -70,6 +70,12 @@ subflow -target example.com -subfinder -probe -ports "80,443,8080,8443"
 
 # Custom output
 subflow -target example.com -subfinder -probe -output results.json -format json
+
+# Process 5 targets in parallel (faster for multiple targets)
+subflow -target targets.txt -full -threads 5
+
+# Skip notifications on first run (only notify on subsequent discoveries)
+subflow -target example.com -full -notify-only-changes
 ```
 
 ### Flags
@@ -102,15 +108,16 @@ OUTPUT:
    -no-color            Disable colored output
 
 NOTIFICATIONS:
-   -discord string      Discord webhook URL
-   -telegram-token      Telegram bot token
-   -telegram-chat       Telegram chat ID
-   -notify string       Notification provider: discord, telegram, both
-   -test-notify         Test Discord/Telegram webhook configuration
+   -discord string         Discord webhook URL
+   -telegram-token         Telegram bot token
+   -telegram-chat          Telegram chat ID
+   -notify string          Notification provider: discord, telegram, both
+   -test-notify            Test Discord/Telegram webhook configuration
+   -notify-only-changes    Only notify on subsequent runs (skip first-run notifications)
 
 CONFIG:
-   -config string       Path to config file
-   -threads int         Number of concurrent threads (default: 10)
+   -config string          Path to config file
+   -threads int            Number of concurrent targets (default: 5)
    -timeout int         Timeout in seconds (default: 30)
    -delay int           Delay between requests in ms
 
