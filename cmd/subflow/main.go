@@ -64,6 +64,7 @@ var (
 	// Storage and notification
 	dbPath       = flag.String("db", "", "database path")
 	notifyOption = flag.String("notify", "", "discord, telegram, both")
+	disableNotify = flag.Bool("no-notify", false, "disable all notifications (Discord/Telegram)")
 
 	// Other flags
 	showVersion = flag.Bool("version", false, "show version")
@@ -584,6 +585,14 @@ func notifyNewDomains(domains []string, target, stage string, isFirstRun bool) {
 		return
 	}
 
+	// Skip all notifications if -no-notify is set
+	if *disableNotify {
+		if !*silentFlag {
+			logger.Debug("notifications disabled", "stage", stage, "count", len(domains))
+		}
+		return
+	}
+
 	// Skip notifications on first run if -notify-only-changes is set
 	if *notifyOnlyChanges && isFirstRun {
 		if !*silentFlag {
@@ -615,6 +624,11 @@ func isFirstRunForTarget(target string) bool {
 
 // sendProbeNotification sends detailed notification for a probed domain
 func sendProbeNotification(result scanner.ProbeResult, target string, isFirstRun bool) {
+	// Skip all notifications if -no-notify is set
+	if *disableNotify {
+		return
+	}
+
 	if webhookURL == "" && !telegramEnabled {
 		return
 	}
@@ -1146,6 +1160,11 @@ func max(a, b int) int {
 
 // sendChangeNotification sends a detailed notification about a detected change
 func sendChangeNotification(result scanner.ProbeResult, target string, change ChangeType) {
+	// Skip all notifications if -no-notify is set
+	if *disableNotify {
+		return
+	}
+
 	if webhookURL == "" && !telegramEnabled {
 		return
 	}
@@ -1357,6 +1376,7 @@ func displayHelp() {
 
 	fmt.Println(" Notifications:")
 	fmt.Println("   -notify              discord, telegram, both")
+	fmt.Println("   -no-notify            disable all notifications (Discord/Telegram)")
 	fmt.Println("   -test-notify         test Discord/Telegram webhook")
 	fmt.Println("   -notify-only-changes only notify on subsequent runs (skip first-run)")
 	fmt.Println()

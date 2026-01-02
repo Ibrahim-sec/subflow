@@ -76,6 +76,9 @@ subflow -target targets.txt -full -threads 5
 
 # Skip notifications on first run (only notify on subsequent discoveries)
 subflow -target example.com -full -notify-only-changes
+
+# Disable all notifications temporarily (useful for initial scans)
+subflow -target example.com -full -no-notify
 ```
 
 ### Flags
@@ -112,6 +115,7 @@ NOTIFICATIONS:
    -telegram-token         Telegram bot token
    -telegram-chat          Telegram chat ID
    -notify string          Notification provider: discord, telegram, both
+   -no-notify              Disable all notifications (temporary disable)
    -test-notify            Test Discord/Telegram webhook configuration
    -notify-only-changes    Only notify on subsequent runs (skip first-run notifications)
 
