@@ -1166,9 +1166,21 @@ func checkForChanges(result scanner.ProbeResult, target string) {
 			logger.Warn(change.Description, "domain", result.Domain, "url", result.URL)
 		}
 
-		// Send notification for high/critical changes
-		if change.Severity == "critical" || change.Severity == "high" {
-			sendChangeNotification(result, target, change)
+		// Buffer notification for batching (all severities)
+		// Skip if -no-notify is set
+		if !*disableNotify {
+			notify.SendChangeNotification(
+				result.Domain,
+				result.URL,
+				change.Type,
+				change.Severity,
+				change.Description,
+				change.OldValue,
+				change.NewValue,
+				result.StatusCode,
+				result.ContentLength,
+				target,
+			)
 		}
 	}
 
@@ -1234,67 +1246,27 @@ func max(a, b int) int {
 	return b
 }
 
-// sendChangeNotification sends a detailed notification about a detected change
+// sendChangeNotification is now handled by notify.SendChangeNotification (batched)
+// This function is kept for backward compatibility but is no longer used
 func sendChangeNotification(result scanner.ProbeResult, target string, change ChangeType) {
 	// Skip all notifications if -no-notify is set
 	if *disableNotify {
 		return
 	}
 
-	if webhookURL == "" && !telegramEnabled {
-		return
-	}
-
-	// Color based on severity
-	var color int
-	var emoji string
-	switch change.Severity {
-	case "critical":
-		color = 15158332 // Red
-		emoji = "🔴"
-	case "high":
-		color = 15105570 // Orange
-		emoji = "🟠"
-	case "medium":
-		color = 16776960 // Yellow
-		emoji = "🟡"
-	default:
-		color = 3066993 // Green
-		emoji = "🟢"
-	}
-
-	payload := map[string]interface{}{
-		"embeds": []map[string]interface{}{
-			{
-				"title":       fmt.Sprintf("%s CHANGE DETECTED: %s", emoji, result.Domain),
-				"description": change.Description,
-				"color":       color,
-				"fields": []map[string]interface{}{
-					{"name": "URL", "value": result.URL, "inline": false},
-					{"name": "Change Type", "value": fmt.Sprintf("`%s`", change.Type), "inline": true},
-					{"name": "Severity", "value": fmt.Sprintf("`%s`", strings.ToUpper(change.Severity)), "inline": true},
-					{"name": "Old Value", "value": fmt.Sprintf("`%s`", change.OldValue), "inline": true},
-					{"name": "New Value", "value": fmt.Sprintf("`%s`", change.NewValue), "inline": true},
-					{"name": "Current Status", "value": fmt.Sprintf("`%d`", result.StatusCode), "inline": true},
-					{"name": "Current Size", "value": fmt.Sprintf("`%d`", result.ContentLength), "inline": true},
-				},
-				"footer":    map[string]string{"text": fmt.Sprintf("Target: %s | Investigate immediately if critical!", target)},
-				"timestamp": time.Now().Format(time.RFC3339),
-			},
-		},
-	}
-
-	if webhookURL != "" {
-		jsonData, _ := json.Marshal(payload)
-		notify.SendDiscordWebhook(webhookURL, jsonData)
-	}
-
-	// Telegram notification
-	if telegramEnabled {
-		msg := fmt.Sprintf("%s *CHANGE DETECTED*\n\nDomain: `%s`\nURL: %s\n\n%s\n\nOld: `%s`\nNew: `%s`\n\n_Target: %s_",
-			emoji, result.Domain, result.URL, change.Description, change.OldValue, change.NewValue, target)
-		notify.SendTelegramMessage(msg)
-	}
+	// Use the new batched notification system
+	notify.SendChangeNotification(
+		result.Domain,
+		result.URL,
+		change.Type,
+		change.Severity,
+		change.Description,
+		change.OldValue,
+		change.NewValue,
+		result.StatusCode,
+		result.ContentLength,
+		target,
+	)
 }
 
 var webhookURL string

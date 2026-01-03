@@ -32,12 +32,37 @@ type notificationBuffer struct {
 	webhookURL string
 }
 
+type changeNotification struct {
+	Domain      string
+	URL         string
+	ChangeType  string
+	Severity    string
+	Description string
+	OldValue    string
+	NewValue    string
+	StatusCode  int
+	ContentLen  int64
+}
+
+type changeBuffer struct {
+	mu         sync.Mutex
+	pending    map[string][]changeNotification
+	timers     map[string]*time.Timer
+	webhookURL string
+}
+
 var discordBuffer *notificationBuffer
+var changeBufferInstance *changeBuffer
 
 // InitDiscord initializes the Discord notifier
 func InitDiscord(webhookURL string) {
 	discordBuffer = &notificationBuffer{
 		pending:    make(map[string][]string),
+		timers:     make(map[string]*time.Timer),
+		webhookURL: webhookURL,
+	}
+	changeBufferInstance = &changeBuffer{
+		pending:    make(map[string][]changeNotification),
 		timers:     make(map[string]*time.Timer),
 		webhookURL: webhookURL,
 	}
@@ -146,5 +171,175 @@ func Truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// SendChangeNotification buffers a change notification for batching
+func SendChangeNotification(domain, url, changeType, severity, description, oldValue, newValue string, statusCode int, contentLen int64, target string) {
+	if changeBufferInstance == nil || changeBufferInstance.webhookURL == "" {
+		return
+	}
+
+	change := changeNotification{
+		Domain:      domain,
+		URL:         url,
+		ChangeType:  changeType,
+		Severity:    severity,
+		Description: description,
+		OldValue:    oldValue,
+		NewValue:    newValue,
+		StatusCode:  statusCode,
+		ContentLen:  contentLen,
+	}
+
+	changeBufferInstance.add(target, change)
+}
+
+func (c *changeBuffer) add(target string, change changeNotification) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.pending[target] = append(c.pending[target], change)
+
+	if len(c.pending[target]) >= maxBatchSize {
+		changes := c.pending[target]
+		delete(c.pending, target)
+		if timer, exists := c.timers[target]; exists {
+			timer.Stop()
+			delete(c.timers, target)
+		}
+		go c.send(target, changes)
+		return
+	}
+
+	if _, exists := c.timers[target]; !exists {
+		c.timers[target] = time.AfterFunc(batchDelay, func() {
+			c.flush(target)
+		})
+	}
+}
+
+func (c *changeBuffer) flush(target string) {
+	c.mu.Lock()
+	changes, exists := c.pending[target]
+	if !exists || len(changes) == 0 {
+		c.mu.Unlock()
+		return
+	}
+	delete(c.pending, target)
+	delete(c.timers, target)
+	c.mu.Unlock()
+
+	c.send(target, changes)
+}
+
+func (c *changeBuffer) send(target string, changes []changeNotification) {
+	payload := BuildChangePayload(target, changes)
+
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+
+	SendDiscordWebhook(c.webhookURL, jsonData)
+}
+
+// BuildChangePayload builds a Discord embed payload for batched changes
+func BuildChangePayload(target string, changes []changeNotification) map[string]interface{} {
+	// Group by severity for better organization
+	critical := []changeNotification{}
+	high := []changeNotification{}
+	medium := []changeNotification{}
+	low := []changeNotification{}
+
+	for _, change := range changes {
+		switch change.Severity {
+		case "critical":
+			critical = append(critical, change)
+		case "high":
+			high = append(high, change)
+		case "medium":
+			medium = append(medium, change)
+		default:
+			low = append(low, change)
+		}
+	}
+
+	var embeds []map[string]interface{}
+	totalChanges := len(changes)
+
+	// Build description with all changes
+	var description strings.Builder
+	description.WriteString(fmt.Sprintf("**%d change(s) detected**\n\n", totalChanges))
+
+	// Add critical changes
+	if len(critical) > 0 {
+		description.WriteString(fmt.Sprintf("🔴 **CRITICAL (%d):**\n", len(critical)))
+		for _, change := range critical {
+			description.WriteString(fmt.Sprintf("• `%s` - %s\n", change.Domain, change.Description))
+		}
+		description.WriteString("\n")
+	}
+
+	// Add high priority changes
+	if len(high) > 0 {
+		description.WriteString(fmt.Sprintf("🟠 **HIGH (%d):**\n", len(high)))
+		for _, change := range high {
+			description.WriteString(fmt.Sprintf("• `%s` - %s\n", change.Domain, change.Description))
+		}
+		description.WriteString("\n")
+	}
+
+	// Add medium priority changes
+	if len(medium) > 0 {
+		description.WriteString(fmt.Sprintf("🟡 **MEDIUM (%d):**\n", len(medium)))
+		for _, change := range medium {
+			description.WriteString(fmt.Sprintf("• `%s` - %s\n", change.Domain, change.Description))
+		}
+		description.WriteString("\n")
+	}
+
+	// Add low priority changes (if any)
+	if len(low) > 0 {
+		description.WriteString(fmt.Sprintf("🟢 **LOW (%d):**\n", len(low)))
+		for _, change := range low {
+			description.WriteString(fmt.Sprintf("• `%s` - %s\n", change.Domain, change.Description))
+		}
+	}
+
+	// Determine color based on highest severity
+	var color int
+	var title string
+	if len(critical) > 0 {
+		color = ColorRed
+		title = fmt.Sprintf("🔴 CRITICAL Changes: %s [%d]", target, totalChanges)
+	} else if len(high) > 0 {
+		color = ColorOrange
+		title = fmt.Sprintf("🟠 Changes Detected: %s [%d]", target, totalChanges)
+	} else if len(medium) > 0 {
+		color = 16776960 // Yellow
+		title = fmt.Sprintf("🟡 Changes Detected: %s [%d]", target, totalChanges)
+	} else {
+		color = 3066993 // Green
+		title = fmt.Sprintf("🟢 Changes Detected: %s [%d]", target, totalChanges)
+	}
+
+	// Truncate description if too long (Discord limit is 4096 chars)
+	desc := description.String()
+	if len(desc) > 4000 {
+		desc = desc[:4000] + "\n\n... (truncated)"
+	}
+
+	embeds = append(embeds, map[string]interface{}{
+		"title":       title,
+		"description": fmt.Sprintf("```\n%s\n```", desc),
+		"color":       color,
+		"timestamp":   time.Now().Format(time.RFC3339),
+		"footer":      map[string]string{"text": fmt.Sprintf("Target: %s", target)},
+	})
+
+	return map[string]interface{}{
+		"tts":    false,
+		"embeds": embeds,
+	}
 }
 
