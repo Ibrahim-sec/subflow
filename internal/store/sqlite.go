@@ -45,8 +45,9 @@ func InitDB() error {
 		}
 
 		// Set connection pool settings for high concurrency
-		db.SetMaxOpenConns(25) // Allow multiple concurrent connections
-		db.SetMaxIdleConns(5)  // Keep some connections warm
+		// Increased for 500+ targets running in parallel
+		db.SetMaxOpenConns(100) // Allow many concurrent connections
+		db.SetMaxIdleConns(20)  // Keep more connections warm
 		db.SetConnMaxLifetime(time.Hour)
 
 		schema := `
@@ -227,6 +228,37 @@ func GetAllKnownDomains(target string) []string {
 	defer dbMu.Unlock()
 
 	rows, err := db.Query("SELECT domain FROM domains WHERE target = ? OR target = ''", target)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var domains []string
+	for rows.Next() {
+		var domain string
+		if err := rows.Scan(&domain); err == nil {
+			domains = append(domains, domain)
+		}
+	}
+
+	return domains
+}
+
+// GetKnownDomainsChunk returns a chunk of known domains for a target (for pagination)
+func GetKnownDomainsChunk(target string, limit, offset int) []string {
+	if db == nil {
+		if err := InitDB(); err != nil {
+			return nil
+		}
+	}
+
+	dbMu.Lock()
+	defer dbMu.Unlock()
+
+	rows, err := db.Query(
+		"SELECT domain FROM domains WHERE target = ? OR target = '' LIMIT ? OFFSET ?",
+		target, limit, offset,
+	)
 	if err != nil {
 		return nil
 	}

@@ -916,7 +916,7 @@ func runMonitoringLoop(ctx context.Context, targets []string, cfg PipelineConfig
 	interval := time.Duration(*intervalFlag) * time.Minute
 
 	if !*silentFlag {
-		logger.Info("monitoring mode", "interval", interval)
+		logger.Info("monitoring mode", "interval", interval, "targets", len(targets))
 	}
 
 	ticker := time.NewTicker(interval)
@@ -928,24 +928,100 @@ func runMonitoringLoop(ctx context.Context, targets []string, cfg PipelineConfig
 			return
 		case <-ticker.C:
 			if !*silentFlag {
-				logger.Info("monitoring cycle")
+				logger.Info("monitoring cycle", "targets", len(targets))
 			}
+
+			// Use parallel processing for monitoring too
+			threads := *threadsFlag
+			if threads < 1 {
+				threads = 5 // Default to 5 if not set
+			}
+
+			sem := make(chan struct{}, threads)
+			var wg sync.WaitGroup
 
 			for _, target := range targets {
-				runTargetPipeline(ctx, target, cfg, outputWriter)
-
-				if *watchFlag {
-					// Re-probe existing domains
-					domains := store.GetAllKnownDomains(target)
-					if len(domains) > 0 && scanner.CheckHttpxInstalled() {
-						results := scanner.WildcardAwareProbe(domains, target)
-						for _, r := range results {
-							checkForChanges(r, target)
-						}
-					}
+				select {
+				case <-ctx.Done():
+					return
+				default:
 				}
+
+				sem <- struct{}{}
+				wg.Add(1)
+
+				go func(t string) {
+					defer wg.Done()
+					defer func() { <-sem }()
+
+					// Run discovery pipeline
+					runTargetPipeline(ctx, t, cfg, outputWriter)
+
+					if *watchFlag {
+						// Re-probe existing domains in chunks to avoid memory issues
+						probeExistingDomainsInChunks(ctx, t)
+					}
+				}(target)
+			}
+
+			wg.Wait()
+
+			if !*silentFlag {
+				logger.Info("monitoring cycle complete", "next_cycle", interval)
 			}
 		}
+	}
+}
+
+// probeExistingDomainsInChunks probes existing domains in chunks to avoid memory exhaustion
+func probeExistingDomainsInChunks(ctx context.Context, target string) {
+	if !scanner.CheckHttpxInstalled() {
+		return
+	}
+
+	// Get domains in chunks to avoid loading 500k+ domains into memory
+	const chunkSize = 1000 // Process 1000 domains at a time
+	offset := 0
+	totalProbed := 0
+
+	for {
+		select {
+		case <-ctx.Done():
+			if !*silentFlag {
+				logger.Debug("watch probing cancelled", "target", target, "probed", totalProbed)
+			}
+			return
+		default:
+		}
+
+		domains := store.GetKnownDomainsChunk(target, chunkSize, offset)
+		if len(domains) == 0 {
+			break // No more domains
+		}
+
+		if !*silentFlag {
+			logger.Debug("probing domain chunk", "target", target, "chunk_size", len(domains), "offset", offset)
+		}
+
+		results := scanner.WildcardAwareProbe(domains, target)
+
+		for _, r := range results {
+			checkForChanges(r, target)
+		}
+
+		totalProbed += len(domains)
+		offset += chunkSize
+
+		// Small delay between chunks to avoid overwhelming the system
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+
+	if !*silentFlag && totalProbed > 0 {
+		logger.Debug("watch probing complete", "target", target, "total_probed", totalProbed)
 	}
 }
 
