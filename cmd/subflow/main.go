@@ -622,14 +622,14 @@ func isFirstRunForTarget(target string) bool {
 	return len(knownDomains) == 0
 }
 
-// sendProbeNotification sends detailed notification for a probed domain
+// sendProbeNotification sends detailed notification for a probed domain (now batched)
 func sendProbeNotification(result scanner.ProbeResult, target string, isFirstRun bool) {
 	// Skip all notifications if -no-notify is set
 	if *disableNotify {
 		return
 	}
 
-	if webhookURL == "" && !telegramEnabled {
+	if webhookURL == "" {
 		return
 	}
 
@@ -638,28 +638,15 @@ func sendProbeNotification(result scanner.ProbeResult, target string, isFirstRun
 		return
 	}
 
-	// Build rich notification
-	payload := map[string]interface{}{
-		"embeds": []map[string]interface{}{
-			{
-				"title":       fmt.Sprintf("🎯 Live: %s", result.Domain),
-				"description": result.URL,
-				"color":       getStatusColor(result.StatusCode),
-				"fields": []map[string]interface{}{
-					{"name": "Status", "value": fmt.Sprintf("`%d`", result.StatusCode), "inline": true},
-					{"name": "Size", "value": fmt.Sprintf("`%d`", result.ContentLength), "inline": true},
-					{"name": "Title", "value": truncate(result.Title, 50), "inline": false},
-				},
-				"footer":    map[string]string{"text": fmt.Sprintf("Target: %s", target)},
-				"timestamp": time.Now().Format(time.RFC3339),
-			},
-		},
-	}
-
-	if webhookURL != "" {
-		jsonData, _ := json.Marshal(payload)
-		notify.SendDiscordWebhook(webhookURL, jsonData)
-	}
+	// Use batched notification system
+	notify.SendLiveHost(
+		result.Domain,
+		result.URL,
+		result.StatusCode,
+		result.ContentLength,
+		result.Title,
+		target,
+	)
 }
 
 func getStatusColor(status int) int {

@@ -30,6 +30,7 @@ type notificationBuffer struct {
 	pending    map[string][]string
 	timers     map[string]*time.Timer
 	webhookURL string
+	bufferType string // "domain" or "livehost"
 }
 
 type changeNotification struct {
@@ -44,6 +45,14 @@ type changeNotification struct {
 	ContentLen  int64
 }
 
+type liveHostNotification struct {
+	Domain        string
+	URL           string
+	StatusCode    int
+	ContentLength int64
+	Title         string
+}
+
 type changeBuffer struct {
 	mu         sync.Mutex
 	pending    map[string][]changeNotification
@@ -53,6 +62,7 @@ type changeBuffer struct {
 
 var discordBuffer *notificationBuffer
 var changeBufferInstance *changeBuffer
+var liveHostBuffer *notificationBuffer
 
 // InitDiscord initializes the Discord notifier
 func InitDiscord(webhookURL string) {
@@ -60,11 +70,19 @@ func InitDiscord(webhookURL string) {
 		pending:    make(map[string][]string),
 		timers:     make(map[string]*time.Timer),
 		webhookURL: webhookURL,
+		bufferType: "domain",
 	}
 	changeBufferInstance = &changeBuffer{
 		pending:    make(map[string][]changeNotification),
 		timers:     make(map[string]*time.Timer),
 		webhookURL: webhookURL,
+	}
+	// Reuse notificationBuffer for live hosts (same structure as domains)
+	liveHostBuffer = &notificationBuffer{
+		pending:    make(map[string][]string),
+		timers:     make(map[string]*time.Timer),
+		webhookURL: webhookURL,
+		bufferType: "livehost",
 	}
 }
 
@@ -115,7 +133,14 @@ func (n *notificationBuffer) flush(target string) {
 }
 
 func (n *notificationBuffer) send(target string, domains []string) {
-	payload := BuildDiscordPayload(target, domains)
+	var payload map[string]interface{}
+	
+	// Check buffer type to determine which payload format to use
+	if n.bufferType == "livehost" {
+		payload = BuildLiveHostPayload(target, domains)
+	} else {
+		payload = BuildDiscordPayload(target, domains)
+	}
 
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
@@ -170,7 +195,40 @@ func Truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+		return s[:maxLen] + "..."
+}
+
+// SendLiveHost buffers a live host notification for batching
+func SendLiveHost(domain, url string, statusCode int, contentLength int64, title, target string) {
+	if liveHostBuffer == nil || liveHostBuffer.webhookURL == "" {
+		return
+	}
+
+	// Format: domain:port | status | size | title
+	formatted := fmt.Sprintf("%s | Status: %d | Size: %d | Title: %s", url, statusCode, contentLength, Truncate(title, 50))
+	liveHostBuffer.add(target, formatted)
+}
+
+// BuildLiveHostPayload builds a Discord embed payload for batched live hosts
+func BuildLiveHostPayload(target string, hosts []string) map[string]interface{} {
+	hostList := strings.Join(hosts, "\n")
+
+	// Truncate if too long (Discord limit is 4096 chars)
+	if len(hostList) > 4000 {
+		hostList = hostList[:4000] + "\n\n... (truncated)"
+	}
+
+	return map[string]interface{}{
+		"tts": false,
+		"embeds": []map[string]interface{}{
+			{
+				"title":       fmt.Sprintf("🎯 Live Hosts: %s  [%d]", target, len(hosts)),
+				"description": fmt.Sprintf("```\n%s\n```", hostList),
+				"color":       ColorGreen,
+				"timestamp":     time.Now().Format(time.RFC3339),
+			},
+		},
+	}
 }
 
 // SendChangeNotification buffers a change notification for batching
