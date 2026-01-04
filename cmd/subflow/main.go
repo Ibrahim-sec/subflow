@@ -243,7 +243,7 @@ func runPipeline(ctx context.Context, targets []string, outputWriter *output.Wri
 				return
 			default:
 			}
-			runTargetPipeline(ctx, target, pipelineConfig, outputWriter)
+			_ = runTargetPipeline(ctx, target, pipelineConfig, outputWriter)
 		}
 	}
 
@@ -263,7 +263,7 @@ type PipelineConfig struct {
 	Resume       bool
 }
 
-func runTargetPipeline(ctx context.Context, target string, cfg PipelineConfig, outputWriter *output.Writer) {
+func runTargetPipeline(ctx context.Context, target string, cfg PipelineConfig, outputWriter *output.Writer) []string {
 	if !*silentFlag {
 		logger.Info("processing target", "target", target)
 	}
@@ -451,11 +451,17 @@ func runTargetPipeline(ctx context.Context, target string, cfg PipelineConfig, o
 	domainsToScan = append(domainsToScan, alterxDomains...) // alterxDomains already filtered for new
 	domainsToScan = discovery.DeduplicateStrings(domainsToScan)
 
+	// Track newly discovered domains for watch mode
+	newlyDiscoveredDomains := make([]string, 0)
+	if len(domainsToScan) > 0 {
+		newlyDiscoveredDomains = append(newlyDiscoveredDomains, domainsToScan...)
+	}
+
 	if len(domainsToScan) == 0 {
 		if !*silentFlag {
 			logger.Info("no new domains to scan", "target", target)
 		}
-		return
+		return newlyDiscoveredDomains
 	}
 
 	if !*silentFlag {
@@ -577,6 +583,8 @@ func runTargetPipeline(ctx context.Context, target string, cfg PipelineConfig, o
 	if !*silentFlag {
 		logger.Info("pipeline complete", "target", target, "total_unique", len(allUniqueDomains))
 	}
+	
+	return newlyDiscoveredDomains
 }
 
 // notifyNewDomains sends a batch notification for new domains
@@ -941,12 +949,38 @@ func runMonitoringLoop(ctx context.Context, targets []string, cfg PipelineConfig
 					defer wg.Done()
 					defer func() { <-sem }()
 
-					// Run discovery pipeline
-					runTargetPipeline(ctx, t, cfg, outputWriter)
+					// Run discovery pipeline and get newly discovered domains
+					newDomains := runTargetPipeline(ctx, t, cfg, outputWriter)
 
-					if *watchFlag {
-						// Re-probe existing domains in chunks to avoid memory issues
-						probeExistingDomainsInChunks(ctx, t)
+					if *watchFlag && len(newDomains) > 0 {
+						// Only probe newly discovered domains for change detection
+						// This is much more efficient than re-probing all existing domains
+						if !*silentFlag {
+							logger.Debug("watch mode: probing new domains for changes", "target", t, "count", len(newDomains))
+						}
+						
+						// Probe in chunks to avoid overwhelming the system
+						const watchChunkSize = 500
+						for i := 0; i < len(newDomains); i += watchChunkSize {
+							end := i + watchChunkSize
+							if end > len(newDomains) {
+								end = len(newDomains)
+							}
+							
+							chunk := newDomains[i:end]
+							results := scanner.WildcardAwareProbe(chunk, t)
+							
+							for _, r := range results {
+								checkForChanges(r, t)
+							}
+							
+							// Small delay between chunks
+							select {
+							case <-ctx.Done():
+								return
+							case <-time.After(200 * time.Millisecond):
+							}
+						}
 					}
 				}(target)
 			}
